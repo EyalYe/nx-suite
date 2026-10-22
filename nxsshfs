@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# sshfs wrapper: feeds the ENICS password (same as the VPN one) from GNOME Keyring.
+# All args are passed through to sshfs. Login user comes from ~/.ssh/config
+# (enicsnx01 -> yeminie); use user@host for other hosts.
+#   nxsshfs enicsnx01:/project/sg13g2/users/yeminie ~/remote
+set -o pipefail
+USER_NAME=yeminie
+
+pw=$(secret-tool lookup service fortivpn user "$USER_NAME") || pw=
+[[ -n $pw ]] || { echo "No password in keyring. Run: nxpasswd" >&2; exit 1; }
+[[ $# -ge 2 ]] || { echo "Usage: nxsshfs [sshfs args...] host:path mountpoint" >&2; exit 1; }
+
+# password_stdin makes sshfs answer ssh's password prompt itself, so the mount
+# survives after this script exits (no pty for us to keep alive).
+printf '%s\n' "$pw" | sshfs -o password_stdin "$@"

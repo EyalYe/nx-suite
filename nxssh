@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+# ssh/scp wrapper: feeds the ENICS password (same as the VPN one) from GNOME Keyring via a pty.
+# Invoked as nxssh -> ssh, as nxscp (symlink) -> scp. All args are passed through.
+#   nxssh enicsnx01
+#   nxscp file.txt enicsnx01:~/
+import fcntl, os, pty, re, select, signal, subprocess, sys, termios, tty
+
+USER = "yeminie"
+CMD = "scp" if os.path.basename(sys.argv[0]) == "nxscp" else "ssh"
+
+pw = subprocess.run(
+    ["secret-tool", "lookup", "service", "fortivpn", "user", USER],
+    capture_output=True, text=True,
+).stdout.rstrip("\n")
+if not pw:
+    sys.exit("No password in keyring. Run: nxpasswd")
+if len(sys.argv) < 2:
+    sys.exit(f"Usage: {os.path.basename(sys.argv[0])} [{CMD} args...]")
+
+pid, fd = pty.fork()
+if pid == 0:
+    # Default login user; an explicit user@host on the command line still wins.
+    os.execvp(CMD, [CMD, "-o", f"User={USER}", *sys.argv[1:]])
+
+stdin_tty = os.isatty(0)
+
+def sync_winsize(*_):
+    if stdin_tty:
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, fcntl.ioctl(0, termios.TIOCGWINSZ, b"\0" * 8))
+
+sync_winsize()
+signal.signal(signal.SIGWINCH, sync_winsize)
+
+old = termios.tcgetattr(0) if stdin_tty else None
+if stdin_tty:
+    tty.setraw(0)
+
+PROMPT = re.compile(rb"('s password|\) password): *$", re.I)
+sent, buf = False, b""
+try:
+    while True:
+        fds = [fd, 0] if stdin_tty else [fd]
+        try:
+            r, _, _ = select.select(fds, [], [])
+        except InterruptedError:
+            continue
+        if fd in r:
+            try:
+                data = os.read(fd, 4096)
+            except OSError:
+                break
+            if not data:
+                break
+            os.write(1, data)
+            # Match only ssh's login prompts -- "user@host's password:" (password auth)
+            # or "(user@host) Password:" (keyboard-interactive) -- not e.g. sudo inside
+            # the session), and only once, so a wrong password falls through to
+            # manual entry instead of burning retries and locking the account.
+            if not sent:
+                buf = (buf + data)[-256:]
+                if PROMPT.search(buf):
+                    os.write(fd, pw.encode() + b"\n")
+                    sent = True
+        if 0 in r:
+            data = os.read(0, 1024)
+            if not data:
+                break
+            os.write(fd, data)
+finally:
+    if old:
+        termios.tcsetattr(0, termios.TCSADRAIN, old)
+
+_, status = os.waitpid(pid, 0)
+sys.exit(os.waitstatus_to_exitcode(status))

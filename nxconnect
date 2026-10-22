@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+# Connect to ENICS_LAB VPN, feeding the password from GNOME Keyring via a pty.
+import os, pty, select, subprocess, sys, termios, tty
+
+USER = "yeminie"
+VPN = "ENICS_LAB"
+
+pw = subprocess.run(
+    ["secret-tool", "lookup", "service", "fortivpn", "user", USER],
+    capture_output=True, text=True,
+).stdout.rstrip("\n")
+if not pw:
+    sys.exit("No password in keyring. Run: secret-tool store --label='ENICS VPN' service fortivpn user " + USER)
+
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp("fortivpn", ["fortivpn", "connect", VPN, "-u", USER, "-p"])
+
+stdin_tty = os.isatty(0)
+old = termios.tcgetattr(0) if stdin_tty else None
+if stdin_tty:
+    tty.setraw(0)
+
+sent, buf = False, b""
+try:
+    while True:
+        fds = [fd, 0] if stdin_tty else [fd]
+        r, _, _ = select.select(fds, [], [])
+        if fd in r:
+            try:
+                data = os.read(fd, 4096)
+            except OSError:
+                break
+            if not data:
+                break
+            os.write(1, data)
+            if not sent:
+                buf = (buf + data)[-256:]
+                if b"password" in buf.lower():
+                    os.write(fd, pw.encode() + b"\n")
+                    sent = True
+        if 0 in r:
+            data = os.read(0, 1024)
+            if not data:
+                break
+            os.write(fd, data)
+finally:
+    if old:
+        termios.tcsetattr(0, termios.TCSADRAIN, old)
+
+_, status = os.waitpid(pid, 0)
+sys.exit(os.waitstatus_to_exitcode(status))
