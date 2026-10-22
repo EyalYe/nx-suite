@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Store (or replace) the ENICS password in GNOME Keyring, where the other nx* tools read it.
+# secret-tool prompts for the password without echoing it.
+#   nxpasswd
+set -e
+USER_NAME=yeminie
+secret-tool store --label='ENICS VPN' service fortivpn user "$USER_NAME"
+secret-tool lookup service fortivpn user "$USER_NAME" >/dev/null && echo "Password stored for $USER_NAME."

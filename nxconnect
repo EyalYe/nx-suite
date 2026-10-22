@@ -10,7 +10,7 @@ pw = subprocess.run(
     capture_output=True, text=True,
 ).stdout.rstrip("\n")
 if not pw:
-    sys.exit("No password in keyring. Run: secret-tool store --label='ENICS VPN' service fortivpn user " + USER)
+    sys.exit("No password in keyring. Run: nxpasswd")
 
 pid, fd = pty.fork()
 if pid == 0:
