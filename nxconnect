@@ -1,12 +1,40 @@
 #!/usr/bin/env python3
 # Connect to the ENICS_LAB VPN with openfortivpn (needs sudo), feeding the password
 # from the macOS Keychain via a pty. Extra args are passed through to openfortivpn
-# (e.g. --trusted-cert=<digest>). Ctrl-C disconnects.
+# (e.g. --trusted-cert=<digest>). Stays in the foreground until the tunnel is up
+# (Ctrl-C aborts), then moves to the background and logs to ~/Library/Logs.
 #   nxconnect
-import os, pty, select, shutil, subprocess, sys, termios, tty
+#   nxconnect -d    # disconnect
+import os, pty, select, shutil, signal, subprocess, sys, tempfile, termios, time, tty
 
 USER = "yeminie"
 VPN = "vpn.eng.biu.ac.il:443"  # FortiClient's ENICS_LAB profile
+LOG = os.path.expanduser("~/Library/Logs/nxconnect.log")
+PIDFILE = os.path.join(tempfile.gettempdir(), "nxconnect.pid")
+
+
+def running_pid():
+    try:
+        pid = int(open(PIDFILE).read())
+        os.kill(pid, 0)
+        return pid
+    except (OSError, ValueError):
+        return None
+
+
+if sys.argv[1:] == ["-d"]:
+    pid = running_pid()
+    if not pid:
+        sys.exit("Not connected.")
+    os.kill(pid, signal.SIGTERM)
+    for _ in range(150):
+        if not running_pid():
+            print("Disconnected.")
+            sys.exit(0)
+        time.sleep(0.1)
+    sys.exit(f"Still disconnecting -- see {LOG}")
+if running_pid():
+    sys.exit("Already connected. Disconnect with: nxconnect -d")
 
 pw = subprocess.run(
     ["security", "find-generic-password", "-s", "fortivpn", "-a", USER, "-w"],
@@ -20,16 +48,52 @@ ofv = shutil.which("openfortivpn")
 if not ofv:
     sys.exit("openfortivpn not found. Install with: brew install openfortivpn")
 
+# The parent holds the shell until the child reports the tunnel is up (or the
+# child exits), then returns the prompt. The child keeps the pty open, since
+# closing it would kill the VPN.
+up_r, up_w = os.pipe()
+child = os.fork()
+if child:
+    os.close(up_w)
+    if os.read(up_r, 1):
+        sys.exit(0)
+    _, status = os.waitpid(child, 0)
+    sys.exit(os.waitstatus_to_exitcode(status))
+os.close(up_r)
+
 pid, fd = pty.fork()
 if pid == 0:
     os.execvp("sudo", ["sudo", ofv, VPN, "-u", USER, *sys.argv[1:]])
+
+# Disconnect the way a Ctrl-C at the terminal would, so openfortivpn restores
+# routes and DNS before exiting.
+signal.signal(signal.SIGTERM, lambda *_: os.write(fd, b"\x03"))
 
 stdin_tty = os.isatty(0)
 old = termios.tcgetattr(0) if stdin_tty else None
 if stdin_tty:
     tty.setraw(0)
 
-sent, buf = False, b""
+
+def detach():
+    global stdin_tty, old
+    if old:
+        termios.tcsetattr(0, termios.TCSADRAIN, old)
+        old = None
+    print(f"\nVPN up, running in the background. Disconnect: nxconnect -d  (log: {LOG})", flush=True)
+    os.write(up_w, b"1")
+    os.close(up_w)
+    os.setsid()  # drop the terminal so closing it doesn't hang up the VPN
+    log = os.open(LOG, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    os.dup2(log, 1)
+    os.dup2(log, 2)
+    os.dup2(os.open(os.devnull, os.O_RDONLY), 0)
+    stdin_tty = False
+    with open(PIDFILE, "w") as f:
+        f.write(str(os.getpid()))
+
+
+sent, detached, buf = False, False, b""
 try:
     while True:
         fds = [fd, 0] if stdin_tty else [fd]
@@ -42,13 +106,15 @@ try:
             if not data:
                 break
             os.write(1, data)
-            if not sent:
-                buf = (buf + data)[-256:]
-                # Only openfortivpn's own prompt -- sudo's "Password:" is left
-                # for the user to type (it wants the Mac password, not this one).
-                if b"vpn account password" in buf.lower():
-                    os.write(fd, pw.encode() + b"\n")
-                    sent = True
+            buf = (buf + data)[-256:]
+            # Only openfortivpn's own prompt -- sudo's "Password:" is left
+            # for the user to type (it wants the Mac password, not this one).
+            if not sent and b"vpn account password" in buf.lower():
+                os.write(fd, pw.encode() + b"\n")
+                sent = True
+            if not detached and b"tunnel is up and running" in buf.lower():
+                detach()
+                detached = True
         if 0 in r:
             data = os.read(0, 1024)
             if not data:
@@ -57,6 +123,8 @@ try:
 finally:
     if old:
         termios.tcsetattr(0, termios.TCSADRAIN, old)
+    if detached:
+        os.unlink(PIDFILE)
 
 _, status = os.waitpid(pid, 0)
 sys.exit(os.waitstatus_to_exitcode(status))

@@ -3,7 +3,7 @@
 Wrappers that feed the ENICS password (same as the VPN one) from the macOS Keychain.
 This is the `mac` branch; `main` is the Linux version (GNOME Keyring + `fortivpn`).
 
-- `nxconnect` — connect to the ENICS_LAB FortiVPN with `openfortivpn` (asks for your Mac's sudo password; Ctrl-C disconnects)
+- `nxconnect` — connect to the ENICS_LAB FortiVPN with `openfortivpn` (asks for your Mac's sudo password); goes to the background once the tunnel is up, `nxconnect -d` disconnects, log in `~/Library/Logs/nxconnect.log`
 - `nxssh` — ssh wrapper (`nxssh enicsnx01`)
 - `nxscp` — scp wrapper, symlink to `nxssh` (`nxscp file.txt enicsnx01:~/`)
 - `nxsshfs` — sshfs wrapper (`nxsshfs enicsnx01:/path ~/remote`)
