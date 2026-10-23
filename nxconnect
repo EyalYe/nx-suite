@@ -1,20 +1,28 @@
 #!/usr/bin/env python3
-# Connect to ENICS_LAB VPN, feeding the password from GNOME Keyring via a pty.
-import os, pty, select, subprocess, sys, termios, tty
+# Connect to the ENICS_LAB VPN with openfortivpn (needs sudo), feeding the password
+# from the macOS Keychain via a pty. Extra args are passed through to openfortivpn
+# (e.g. --trusted-cert=<digest>). Ctrl-C disconnects.
+#   nxconnect
+import os, pty, select, shutil, subprocess, sys, termios, tty
 
 USER = "yeminie"
-VPN = "ENICS_LAB"
+VPN = "vpn.eng.biu.ac.il:443"  # FortiClient's ENICS_LAB profile
 
 pw = subprocess.run(
-    ["secret-tool", "lookup", "service", "fortivpn", "user", USER],
+    ["security", "find-generic-password", "-s", "fortivpn", "-a", USER, "-w"],
     capture_output=True, text=True,
 ).stdout.rstrip("\n")
 if not pw:
-    sys.exit("No password in keyring. Run: nxpasswd")
+    sys.exit("No password in Keychain. Run: nxpasswd")
+
+# Full path: sudo's PATH may not include /opt/homebrew/bin.
+ofv = shutil.which("openfortivpn")
+if not ofv:
+    sys.exit("openfortivpn not found. Install with: brew install openfortivpn")
 
 pid, fd = pty.fork()
 if pid == 0:
-    os.execvp("fortivpn", ["fortivpn", "connect", VPN, "-u", USER, "-p"])
+    os.execvp("sudo", ["sudo", ofv, VPN, "-u", USER, *sys.argv[1:]])
 
 stdin_tty = os.isatty(0)
 old = termios.tcgetattr(0) if stdin_tty else None
@@ -36,7 +44,9 @@ try:
             os.write(1, data)
             if not sent:
                 buf = (buf + data)[-256:]
-                if b"password" in buf.lower():
+                # Only openfortivpn's own prompt -- sudo's "Password:" is left
+                # for the user to type (it wants the Mac password, not this one).
+                if b"vpn account password" in buf.lower():
                     os.write(fd, pw.encode() + b"\n")
                     sent = True
         if 0 in r:
