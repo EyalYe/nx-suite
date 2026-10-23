@@ -7,9 +7,10 @@ This is the `mac` branch; `main` is the Linux version (GNOME Keyring + `fortivpn
 - `nxssh` — ssh wrapper (`nxssh enicsnx01`)
 - `nxscp` — scp wrapper, symlink to `nxssh` (`nxscp file.txt enicsnx01:~/`)
 - `nxsshfs` — sshfs wrapper (`nxsshfs enicsnx01:/path ~/remote`)
+- `nxtiger` — open a VNC session in TigerVNC Viewer, logged in automatically (`nxtiger enics01:11`); doesn't block the terminal, log in `~/Library/Logs/nxtiger.log`
 - `nxpasswd` — store or change the password in the Keychain
 
-Requirements (Homebrew): `openfortivpn`, `sshfs-mac` + macFUSE.
+Requirements (Homebrew): `openfortivpn`, `sshfs-mac` + macFUSE; TigerVNC Viewer in `/Applications`.
 
 Store the password once (and again whenever it changes):
 
@@ -24,10 +25,10 @@ If `nxconnect` complains about the gateway certificate, pass the digest it print
 
 Host names resolve via `~/.ssh/config`, e.g.:
 
-    Host enicsnx01
+    Host enicsnx01 enics01
         HostName 192.168.50.91
         User yeminie
 
-(`enicsnx02`–`04` are `.92`–`.94`.)
+(`enicsnx02`–`04` are `.92`–`.94`; `nxtiger` uses the same names.)
 
 Install by copying (keep the symlink) into `~/.local/bin`.

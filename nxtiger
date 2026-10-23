@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+# Open a VNC session in TigerVNC Viewer, logging in with the ENICS password
+# from the macOS Keychain. The host goes through ~/.ssh/config (so enics01 ->
+# 192.168.50.91), and the viewer runs detached so the terminal is free.
+# Needs the VPN up (nxconnect).
+#   nxtiger enics01:11
+import glob, os, socket, subprocess, sys
+
+USER = "yeminie"
+LOG = os.path.expanduser("~/Library/Logs/nxtiger.log")
+
+if len(sys.argv) != 2 or not sys.argv[1].rpartition(":")[2].isdigit():
+    sys.exit("Usage: nxtiger host:display   (e.g. nxtiger enics01:11)")
+host, disp = sys.argv[1].rsplit(":", 1)
+
+pw = subprocess.run(
+    ["security", "find-generic-password", "-s", "fortivpn", "-a", USER, "-w"],
+    capture_output=True, text=True,
+).stdout.rstrip("\n")
+if not pw:
+    sys.exit("No password in Keychain. Run: nxpasswd")
+
+viewers = sorted(glob.glob("/Applications/TigerVNC Viewer*.app/Contents/MacOS/TigerVNC Viewer"))
+if not viewers:
+    sys.exit("TigerVNC Viewer not found in /Applications.")
+
+# HostName from ~/.ssh/config, falling back to the name as given.
+ip = next((line.split()[1] for line in subprocess.run(
+    ["ssh", "-G", host], capture_output=True, text=True,
+).stdout.splitlines() if line.startswith("hostname ")), host)
+
+try:
+    socket.create_connection((ip, 5900 + int(disp)), timeout=3).close()
+except OSError as e:
+    sys.exit(f"Can't reach {ip}:{5900 + int(disp)} ({e}). Is the VPN up? (nxconnect)")
+
+# TigerVNC answers the server's username/password (Plain) login from these.
+env = dict(os.environ, VNC_USERNAME=USER, VNC_PASSWORD=pw)
+with open(LOG, "a") as log:
+    subprocess.Popen([viewers[-1], f"{ip}:{disp}"], env=env, start_new_session=True,
+                     stdin=subprocess.DEVNULL, stdout=log, stderr=log)
+print(f"TigerVNC opened for {host}:{disp} ({ip}). Log: {LOG}")
